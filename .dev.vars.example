@@ -1,0 +1,4 @@
+# Copy to `.dev.vars` for local development (never commit the real file).
+# Generate a strong value with: openssl rand -hex 32
+# This must match the BYOK key stored in AI Gateway for the custom provider.
+OLLAMA_SECRET=""
