@@ -18,8 +18,9 @@
 interface Env {
 	// VPC Service binding configured in wrangler.jsonc
 	OLLAMA: { fetch: typeof fetch };
-	// Secret shared with AI Gateway BYOK: `wrangler secret put OLLAMA_SECRET`
-	OLLAMA_SECRET: string;
+	// Secrets Store binding holding the shared bearer token. Must match the
+	// AI Gateway BYOK key for this provider. Resolved at runtime via .get().
+	OLLAMA_SECRET: { get(): Promise<string> };
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
@@ -34,8 +35,9 @@ export default {
 	async fetch(request, env): Promise<Response> {
 		// 1. Enforce the shared secret (injected upstream by AI Gateway BYOK).
 		const auth = request.headers.get("Authorization") ?? "";
-		const expected = `Bearer ${env.OLLAMA_SECRET}`;
-		if (!env.OLLAMA_SECRET || !timingSafeEqual(auth, expected)) {
+		const secret = await env.OLLAMA_SECRET.get();
+		const expected = `Bearer ${secret}`;
+		if (!secret || !timingSafeEqual(auth, expected)) {
 			return new Response("Unauthorized", { status: 401 });
 		}
 

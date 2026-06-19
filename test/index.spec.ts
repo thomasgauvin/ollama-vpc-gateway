@@ -8,7 +8,7 @@ const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 // reached on the unauthorized paths, so a stub that throws is sufficient to
 // prove we reject before forwarding.
 const testEnv = {
-	OLLAMA_SECRET: "test-secret",
+	OLLAMA_SECRET: { get: async () => "test-secret" },
 	OLLAMA: {
 		fetch: async () => {
 			throw new Error("VPC binding should not be called on unauthorized requests");

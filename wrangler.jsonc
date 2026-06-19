@@ -24,6 +24,18 @@
 			"service_id": "019ee0d9-d25d-7a62-ab33-f6f5d08b7136",
 			"remote": true
 		}
+	],
+	/**
+	 * Secrets Store binding -> shared bearer token validated on each request.
+	 * Must hold the same value as the AI Gateway BYOK key for this provider.
+	 * https://developers.cloudflare.com/secrets-store/integrations/workers/
+	 */
+	"secrets_store_secrets": [
+		{
+			"binding": "OLLAMA_SECRET",
+			"store_id": "8461d1f5f6d2402caaf28d91bfa73a5b",
+			"secret_name": "ollama_gateway_secret"
+		}
 	]
 	/**
 	 * Smart Placement
