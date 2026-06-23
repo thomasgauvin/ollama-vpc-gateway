@@ -34,7 +34,7 @@
 		{
 			"binding": "OLLAMA_SECRET",
 			"store_id": "8461d1f5f6d2402caaf28d91bfa73a5b",
-			"secret_name": "ollama_gateway_secret"
+			"secret_name": "agents-workbench-gateway_ollama-local_default"
 		}
 	]
 	/**
