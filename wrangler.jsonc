@@ -8,7 +8,11 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2026-06-19",
 	"observability": {
-		"enabled": true
+		"enabled": true,
+		// 100% sampling — this is a low-traffic debug gateway and we want every
+		// request logged for troubleshooting "Failed to parse model output".
+		// Drop to 0.1 or lower for high-traffic production Workers.
+		"head_sampling_rate": 1
 	},
 	"upload_source_maps": true,
 	"compatibility_flags": [

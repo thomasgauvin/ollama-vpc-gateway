@@ -102,10 +102,29 @@ export class Logger {
 			headers[k] = k.toLowerCase() === "authorization" ? (redactHeader(v) ?? "") : v;
 		});
 
+		// Extract Cloudflare request metadata (colo, geo) when available. On the
+		// real edge `request.cf` is populated; in tests/local dev it is absent.
+		const cf = (request as Request & { cf?: Record<string, unknown> }).cf;
+		const cfMeta = cf
+			? {
+					colo: cf.colo,
+					country: cf.country,
+					city: cf.city,
+					region: cf.region,
+					asn: cf.asn,
+					httpProtocol: cf.httpProtocol,
+					tlsVersion: cf.tlsVersion,
+					tlsCipher: cf.tlsCipher,
+				}
+			: undefined;
+
 		this.info("request_received", {
 			method: request.method,
 			url: request.url,
+			path: new URL(request.url).pathname,
 			headers,
+			cf: cfMeta,
+			contentLength: request.headers.get("content-length"),
 			...extra,
 		});
 	}
@@ -120,7 +139,9 @@ export class Logger {
 		this.info("upstream_request", {
 			method: request.method,
 			url: request.url,
+			path: new URL(request.url).pathname,
 			headers,
+			contentLength: request.headers.get("content-length"),
 			...extra,
 		});
 	}

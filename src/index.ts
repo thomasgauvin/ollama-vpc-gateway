@@ -42,43 +42,59 @@ export default {
 		// ------------------------------------------------------------------
 		// 1. Validate the shared secret (injected upstream by AI Gateway BYOK).
 		// ------------------------------------------------------------------
+		const authStart = Date.now();
 		const authHeader = request.headers.get("Authorization") ?? "";
 		let secret: string;
 		try {
 			secret = await env.OLLAMA_SECRET.get();
 		} catch (err) {
 			logger.error("failed_to_read_secret", { error: String(err) });
-			return new Response("Internal Server Error", { status: 500 });
+			return new Response("Internal Server Error", {
+				status: 500,
+				headers: { "x-request-id": logger.requestId },
+			});
 		}
 
 		const expected = `Bearer ${secret}`;
 		const authOk = secret && timingSafeEqual(authHeader, expected);
+		const authDurationMs = Date.now() - authStart;
 
 		logger.debug("auth_check", {
 			hasAuthHeader: authHeader.length > 0,
 			hasSecret: !!secret,
 			authOk,
 			authHeaderPrefix: authHeader.slice(0, 12) || "<none>",
+			authDurationMs,
 		});
 
 		if (!authOk) {
 			logger.warn("auth_failed", {
 				status: 401,
 				reason: !secret ? "secret_not_configured" : "bearer_mismatch",
+				authDurationMs,
 			});
-			return new Response("Unauthorized", { status: 401 });
+			return new Response("Unauthorized", {
+				status: 401,
+				headers: { "x-request-id": logger.requestId },
+			});
 		}
 
-		logger.info("auth_success");
+		logger.info("auth_success", { authDurationMs });
 
 		// ------------------------------------------------------------------
 		// 2. Log the request body (JSON) without consuming the original stream.
 		// ------------------------------------------------------------------
+		const bodyReadStart = Date.now();
 		const { freshRequest: requestWithBody, json: requestJson } =
 			await logger.logRequestBody(request, {
 				label: "gateway_request_body",
 				maxChars: 4096,
 			});
+		const bodyReadMs = Date.now() - bodyReadStart;
+		logger.debug("request_body_read", {
+			bodyReadMs,
+			parsed: requestJson !== null,
+		});
 
 		if (requestJson) {
 			logger.debug("request_json_preview", {
@@ -114,12 +130,14 @@ export default {
 		// ------------------------------------------------------------------
 		// 4. Forward over the VPC Service binding.
 		// ------------------------------------------------------------------
+		const upstreamStart = Date.now();
 		let upstreamResponse: Response;
 		try {
 			upstreamResponse = await env.OLLAMA.fetch(upstream);
 		} catch (err) {
 			logger.error("ollama_fetch_failed", {
 				error: String(err),
+				upstreamDurationMs: Date.now() - upstreamStart,
 				elapsedMs: Date.now() - startTime,
 			});
 			return new Response(
@@ -131,18 +149,38 @@ export default {
 				}),
 				{
 					status: 502,
-					headers: { "Content-Type": "application/json" },
+					headers: {
+						"Content-Type": "application/json",
+						"x-request-id": logger.requestId,
+					},
 				}
 			);
 		}
 
+		const upstreamDurationMs = Date.now() - upstreamStart;
 		const elapsedMs = Date.now() - startTime;
+
+		// Detect streaming responses so we can correlate stream parsing issues.
+		// Ollama streams via application/x-ndjson (NOT text/event-stream), and
+		// may also signal via chunked transfer-encoding.
+		const contentType = upstreamResponse.headers.get("content-type") ?? "";
+		const transferEncoding = upstreamResponse.headers.get("transfer-encoding") ?? "";
+		const clientRequestedStream =
+			!!requestJson && (requestJson as Record<string, unknown>).stream === true;
+		const isStreaming =
+			contentType.includes("text/event-stream") ||
+			contentType.includes("application/x-ndjson") ||
+			transferEncoding.includes("chunked");
 
 		logger.info("ollama_response_received", {
 			status: upstreamResponse.status,
 			statusText: upstreamResponse.statusText,
-			contentType: upstreamResponse.headers.get("content-type"),
+			contentType,
 			contentLength: upstreamResponse.headers.get("content-length"),
+			isStreaming,
+			clientRequestedStream,
+			transferEncoding,
+			upstreamDurationMs,
 			elapsedMs,
 		});
 
@@ -150,11 +188,13 @@ export default {
 		// 5. Log the response body so we can debug "Failed to parse model output".
 		//    We clone + read the body, then rebuild the response for the client.
 		// ------------------------------------------------------------------
+		const responseReadStart = Date.now();
 		const { text: responseBody, freshResponse } =
 			await logger.logResponseBody(upstreamResponse, {
 				label: "ollama_response_body",
 				maxChars: 16384,
 			});
+		const responseReadMs = Date.now() - responseReadStart;
 
 		// Try to detect common error patterns in the body.
 		let bodyErrorHint: string | undefined;
@@ -169,14 +209,24 @@ export default {
 				hint: bodyErrorHint,
 				status: upstreamResponse.status,
 				bodyPreview: responseBody.slice(0, 500),
+				responseReadMs,
 			});
 		}
 
 		// ------------------------------------------------------------------
 		// 6. Return the (rebuilt) response to AI Gateway.
+		//    Attach x-request-id so clients can correlate with Workers Logs.
 		// ------------------------------------------------------------------
+		freshResponse.headers.set("x-request-id", logger.requestId);
+
 		logger.logResponse(freshResponse, { elapsedMs });
-		logger.info("request_complete", { elapsedMs });
+		logger.info("request_complete", {
+			elapsedMs,
+			authDurationMs,
+			bodyReadMs,
+			upstreamDurationMs,
+			responseReadMs,
+		});
 
 		return freshResponse;
 	},
