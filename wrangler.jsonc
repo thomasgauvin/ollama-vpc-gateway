@@ -9,8 +9,7 @@
 	"compatibility_date": "2026-06-19",
 	"observability": {
 		"enabled": true,
-		// 100% sampling — this is a low-traffic debug gateway and we want every
-		// request logged for troubleshooting "Failed to parse model output".
+		// 100% sampling — low-traffic debug gateway; log every request.
 		// Drop to 0.1 or lower for high-traffic production Workers.
 		"head_sampling_rate": 1
 	},
