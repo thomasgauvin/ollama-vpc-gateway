@@ -185,9 +185,37 @@ export default {
 		});
 
 		// ------------------------------------------------------------------
-		// 5. Log the response body so we can debug "Failed to parse model output".
-		//    We clone + read the body, then rebuild the response for the client.
+		// 5. Forward the response body to the client.
+		//    Streaming responses are teed through a TransformStream so chunks
+		//    reach the client immediately — buffering would defeat streaming and
+		//    break the AI Gateway's SSE parser. Non-streaming responses are
+		//    buffered so we can inspect the body for error patterns.
 		// ------------------------------------------------------------------
+		const shouldStream = isStreaming || clientRequestedStream;
+
+		if (shouldStream) {
+			const streamStart = Date.now();
+			const streamResponse = logger.streamResponseBody(upstreamResponse, {
+				label: "ollama_response_body",
+				maxChars: 16384,
+				onComplete: ({ chunkCount, totalBytes }) => {
+					logger.info("stream_complete", {
+						chunkCount,
+						totalBytes,
+						streamDurationMs: Date.now() - streamStart,
+						elapsedMs: Date.now() - startTime,
+						authDurationMs,
+						bodyReadMs,
+						upstreamDurationMs,
+					});
+				},
+			});
+			streamResponse.headers.set("x-request-id", logger.requestId);
+			logger.logResponse(streamResponse, { elapsedMs, isStreaming: true });
+			return streamResponse;
+		}
+
+		// Non-streaming: buffer for body inspection + logging.
 		const responseReadStart = Date.now();
 		const { text: responseBody, freshResponse } =
 			await logger.logResponseBody(upstreamResponse, {
@@ -214,14 +242,15 @@ export default {
 		}
 
 		// ------------------------------------------------------------------
-		// 6. Return the (rebuilt) response to AI Gateway.
+		// 6. Return the response to AI Gateway.
 		//    Attach x-request-id so clients can correlate with Workers Logs.
 		// ------------------------------------------------------------------
 		freshResponse.headers.set("x-request-id", logger.requestId);
 
-		logger.logResponse(freshResponse, { elapsedMs });
+		const totalElapsedMs = Date.now() - startTime;
+		logger.logResponse(freshResponse, { elapsedMs: totalElapsedMs });
 		logger.info("request_complete", {
-			elapsedMs,
+			elapsedMs: totalElapsedMs,
 			authDurationMs,
 			bodyReadMs,
 			upstreamDurationMs,

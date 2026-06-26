@@ -198,6 +198,88 @@ export class Logger {
 	}
 
 	/**
+	 * Pass a streaming Response body through to the client while teeing chunks
+	 * for logging. Unlike {@link logResponseBody}, this does NOT buffer — chunks
+	 * reach the client immediately, so streaming (SSE / ndjson) is preserved.
+	 * The accumulated preview is logged when the stream completes (TransformStream
+	 * flush). Use this for streaming responses where buffering would break the
+	 * downstream parser.
+	 */
+	streamResponseBody(
+		response: Response,
+		options: {
+			maxChars?: number;
+			label?: string;
+			onComplete?: (info: {
+				text: string;
+				chunkCount: number;
+				totalBytes: number;
+				truncated: boolean;
+			}) => void;
+		} = {}
+	): Response {
+		const { maxChars = 8192, label = "response_body", onComplete } = options;
+
+		if (!response.body) {
+			this.warn("stream_response_no_body");
+			return new Response(null, {
+				status: response.status,
+				statusText: response.statusText,
+				headers: response.headers,
+			});
+		}
+
+		const decoder = new TextDecoder();
+		let accumulated = "";
+		let totalBytes = 0;
+		let chunkCount = 0;
+		let truncated = false;
+		const self = this;
+
+		const transform = new TransformStream<Uint8Array, Uint8Array>({
+			transform(chunk, controller) {
+				chunkCount++;
+				totalBytes += chunk.byteLength;
+				// Decode every chunk to keep decoder state consistent, but only
+				// retain up to maxChars for the logging preview.
+				const text = decoder.decode(chunk, { stream: true });
+				if (accumulated.length < maxChars) {
+					const remaining = maxChars - accumulated.length;
+					accumulated += text.slice(0, remaining);
+					if (text.length > remaining) truncated = true;
+				} else {
+					truncated = true;
+				}
+				controller.enqueue(chunk);
+			},
+			flush() {
+				const tail = decoder.decode();
+				if (accumulated.length < maxChars) {
+					accumulated += tail.slice(0, maxChars - accumulated.length);
+				}
+				const preview = truncated
+					? accumulated.slice(0, maxChars) + "… [truncated]"
+					: accumulated;
+
+				self.debug(label, {
+					bodyLength: totalBytes,
+					chunkCount,
+					truncated,
+					body: preview,
+				});
+
+				onComplete?.({ text: accumulated, chunkCount, totalBytes, truncated });
+			},
+		});
+
+		return new Response(response.body.pipeThrough(transform), {
+			status: response.status,
+			statusText: response.statusText,
+			headers: response.headers,
+		});
+	}
+
+	/**
 	 * Attempt to parse and log a JSON request body without consuming the
 	 * original Request. Returns a fresh Request with the same body.
 	 */
